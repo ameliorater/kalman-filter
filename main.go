@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
 	"golang.org/x/exp/rand"
 	"gonum.org/v1/gonum/mat"
@@ -9,29 +10,14 @@ import (
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
+	"log"
 	"math"
+	"os"
+	"strconv"
 	"time"
 )
 
-type Gaussian struct {
-	mean float64
-	stdDev float64
-}
-
 var randSource = rand.NewSource(uint64(time.Now().UnixNano()))
-
-//type State struct {
-//	sx float64  //x-position
-//	sy float64  //y-position
-//	vx float64  //x-velocity
-//	vy float64  //y-velocity
-//}
-
-//idea: make interactive tool to visualize kalman on different inputs and types of stuff
-//allow slider for input std dev, and for the one the filter thinks it is (model and measurement)
-//also initial guess/starting position, number of data points, etc.
-
-//need to print parameters alongside plot for final version
 
 func main () {
 	//parameters
@@ -55,7 +41,7 @@ func main () {
 	//dataDist := Gaussian{mean: constData, stdDev: 5}
 	data := make([]mat.Matrix, numDataPoints)  //slice of matrices
 	noisyData := make([]mat.Matrix, numDataPoints)  //slice of matrices
-	x0 := mat.NewDense(4,1, []float64{0, 0.1, 0, .1})  //initial state
+	x0 := mat.NewDense(4,1, []float64{0, 0.3, 0, .3})  //initial state
 	data[0] = x0
 	noisyData[0] = x0
 	for i := 1; i < numDataPoints; i++ {
@@ -108,12 +94,7 @@ func main () {
 	}
 
 	plotKalman(noisyData, data, states)
-
-}
-
-//function to get (constant) data + noise in matrix form
-func noisyConstant (dist Gaussian) float64 {
-	return rand.NormFloat64() * dist.stdDev + dist.mean
+	exportToCSV(noisyData, data, states)
 }
 
 //used to get next state from previous state (for data generation) and noisy state from current state (measurement generation)
@@ -126,8 +107,8 @@ func getNewState (x, stateChange mat.Matrix, covariances mat.Symmetric) mat.Matr
 	return nextState
 }
 
-
-func plotKalman (noisyData, data []mat.Matrix, states []mat.Matrix) {
+//plots measurements, actual data, and filter predictions
+func plotKalman (noisyData, data, states []mat.Matrix) {
 	p, _ := plot.New()
 
 	p.Title.Text = "Kalman Filter Example"
@@ -135,17 +116,51 @@ func plotKalman (noisyData, data []mat.Matrix, states []mat.Matrix) {
 	p.Y.Label.Text = "Y"
 
 	plotutil.AddLinePoints(p,
-		"Measurement", getPoints(noisyData),
+		"Actual", getPoints(data),
 		"Predictions", getPoints(states),
-		"Actual", getPoints(data))
+		"Measurements", getPoints(noisyData))
 
 
 	// Save the plot to a PNG file.
 	p.Save(4*vg.Inch, 4*vg.Inch, "points.png")
 }
 
+func exportToCSV (noisyData, data, states []mat.Matrix) {
+	dataX, dataY := getXYLists(data)
+	noisyDataX, noisyDataY := getXYLists(noisyData)
+	statesX, statesY := getXYLists(states)
 
-//utilities
+	csvData := make([][]string, len(data)+1)
+	csvData[0] = []string{"dataX", "dataY", "measurementX", "measurementY", "predictionX", "predictionY"}
+	for i := range data {
+		csvData[i+1] = []string{dataX[i], dataY[i], noisyDataX[i], noisyDataY[i], statesX[i], statesY[i]}
+	}
+
+	//csvData := [][]string{dataX, dataY, noisyDataX, noisyDataY, statesX, statesY}
+
+	file, _ := os.Create("result.csv")
+	defer file.Close()
+
+	w := csv.NewWriter(file)
+	w.WriteAll(csvData) // calls Flush internally
+
+	if err := w.Error(); err != nil {
+		log.Fatalln("error writing csv:", err)
+	}
+}
+
+//util for saving data to csv
+func getXYLists (matList []mat.Matrix) ([]string, []string) {
+	xList := make([]string, len(matList))
+	yList := make([]string, len(matList))
+	for i := range matList {
+		xList[i] = strconv.FormatFloat(matList[i].At(0,0), 'f', -1, 64)
+		yList[i] = strconv.FormatFloat(matList[i].At(numRows(matList[i])/2,0), 'f', -1, 64)
+	}
+	return xList, yList
+}
+
+//matrix utils
 
 func printMat (m mat.Matrix) {
 	fmt.Printf("%v\n", mat.Formatted(m, mat.Prefix(""), mat.Excerpt(0)))
@@ -168,16 +183,6 @@ func scaledId (n int, scalar float64) mat.Symmetric {
 	}
 	m.ScaleSym(scalar, m)
 	return m
-}
-
-//func scale (m mat.Symmetric, scalar float64) mat.Symmetric {
-//	retMat := mat.NewSymDense(numRows(m), nil)
-//	retMat.ScaleSym(scalar, m)
-//	return retMat
-//}
-
-func getConstMat (r, c int, value float64) mat.Matrix {
-	return mat.NewDense(r, c, getConstList(r*c, value))
 }
 
 func getConstList (n int, value float64) []float64 {
